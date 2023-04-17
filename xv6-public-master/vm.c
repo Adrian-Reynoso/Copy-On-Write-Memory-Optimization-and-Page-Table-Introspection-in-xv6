@@ -5,10 +5,19 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
+#include "spinlock.h"
 #include "elf.h"
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
+
+//Initialize counter for the CoW implementation as a structure
+struct counter 
+{
+  struct spinlock spinLock;
+  unsigned int count[PHYSTOP/PGSIZE];
+};
+struct counter cowCounter;
 
 // Set up CPU's kernel segment descriptors.
 // Run once on entry on each CPU.
@@ -190,6 +199,11 @@ inituvm(pde_t *pgdir, char *init, uint sz)
   memset(mem, 0, PGSIZE);
   mappages(pgdir, 0, PGSIZE, V2P(mem), PTE_W|PTE_U);
   memmove(mem, init, sz);
+
+  //Initialized cowCounter to 0
+  acquire(&cowCounter.spinLock);
+  cowCounter.count[V2P(mem) / PGSIZE] = 0;
+  release(&cowCounter.spinLock);
 }
 
 // Load a program segment into pgdir.  addr must be page-aligned
@@ -244,6 +258,11 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       kfree(mem);
       return 0;
     }
+
+    //Do the same thing in inituvm() and initialize counter to 0
+    acquire(&cowCounter.spinLock);
+    cowCounter.count[V2P(mem) / PGSIZE] = 0;
+    release(&cowCounter.spinLock);
   }
   return newsz;
 }
@@ -270,9 +289,33 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       pa = PTE_ADDR(*pte);
       if(pa == 0)
         panic("kfree");
-      char *v = P2V(pa);
-      kfree(v);
-      *pte = 0;
+
+      //If the counter is equal to 0, free the page table
+      if (cowCounter.count[pa/PGSIZE] == 0)
+      {
+        char *v = P2V(pa);
+        kfree(v);
+        *pte = 0;
+      }
+      //If not, decrement counter and check if counter is 0 again
+      else
+      {
+        aquire(&cowCounter.spinLock);
+        cowCounter.count[pa/PGSIZE]--;
+        release(&cowCounter.spinLock);
+      }
+
+      //Now, if the counter is now 0, update shared and writable flag
+      if (cowCounter.count[pa/PGSIZE] == 0)
+      {
+        //Get the parent using walkpgdir
+        pde_t* currProc = myproc()->parent->pgdir;
+        pte_t* tempParent = walkpgdir(currProc, a, 1);
+
+        //With this parent, update its shared (to be not shared) and writable (to be writable) flags
+        *tempParent = *tempParent & ~PTE_S;
+        *tempParent = *tempParent | PTE_W;
+      }
     }
   }
   return newsz;
@@ -392,3 +435,124 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 //PAGEBREAK!
 // Blank page.
 
+//------------------------------NEWLY IMPLEMENTED FUNCTIONS: COW & PAGEBREAK------------------------------//
+
+
+// Given a parent process's page table, create a copy
+// of it for a child.
+pde_t*
+cow(pde_t *pgdir, uint sz)
+{
+  pde_t *d;
+  pte_t *pte;
+  uint pa, i, flags;
+  char *mem;
+
+  if((d = setupkvm()) == 0)
+    return 0;
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
+      panic("copyuvm: pte should exist");
+    if(!(*pte & PTE_P))
+      panic("copyuvm: page not present");
+
+    //Once we get the security checks, set flags of pte as non-writable and shared
+    *pte = *pte & ~PTE_W;
+    *pte = *pte | PTE_S;
+
+    pa = PTE_ADDR(*pte);
+    flags = PTE_FLAGS(*pte);
+    // if((mem = kalloc()) == 0)
+    //   goto bad;
+    // memmove(mem, (char*)P2V(pa), PGSIZE);
+    // Map child to parent's page
+    if(mappages(d, (void*)i, PGSIZE, pa, flags) < 0) {
+      // kfree(mem);
+      goto bad;
+    }
+
+    //Increment counter
+    acquire(&cowCounter.spinLock);
+    cowCounter.count[pa/PGSIZE]++;
+    release(&cowCounter.spinLock);
+  }
+
+  //Reinstall TLB entries
+  lcr3(V2P(pgdir));
+  return d;
+
+bad:
+  freevm(d);
+  return 0;
+}
+
+
+void 
+pagefault()
+{
+  pte_t *pte;
+  uint pa, i, flags;
+  char *mem;
+
+  //1) Get cr2 address
+  uint cr2Address = rcr2();
+
+  //2) Check if the address found by rcr2() method is not 0
+  if (cr2Address == 0)
+  {
+    panic("Within pagefault: null pointer");
+  }
+
+  //3) Find page table entry using walkpgdir
+  pte = walkpgdir(myproc()->pgdir, (void *) cr2Address, 0);
+
+  //4) If pte is not shared, give panic error
+  uint test = *pte & PTE_S;
+  if (test == 0)
+  {
+    panic("Within pagefault: pte is NOT shared");
+  }
+
+  //5) If pte is not present, give panic error
+  test = *pte & PTE_P;
+  if (test == 0)
+  {
+    panic("Within pagefault: pte is NOT present");
+  }
+
+  //6) Find physical address(pa) and 20 bit physical page number(ppn)
+  pa = PTE_ADDR(*pte);
+
+  //7) Check if the table is shared or not by looking at counter (Set the flags in pte here!)
+  if (cowCounter.count[pa/PGSIZE] == 0)
+  {
+    *pte = *pte & ~PTE_S;
+    *pte = *pte | PTE_W;
+  }
+  else //8) If shared
+  {
+    //8a) Create a new page table
+    mem = kalloc();
+
+    //8b) copy contents of page table we have
+    memmove(mem, P2V(pa), PGSIZE);
+
+    //8c) Change flags (user, present, writable, not shared)
+    *pte = V2P(mem);
+    *pte = *pte | PTE_U;
+    *pte = *pte | PTE_P;
+    *pte = *pte | PTE_W;
+    *pte = *pte & ~PTE_S;
+
+    //8d) Insert the new physical page num????
+
+    //8e) decrease the counter
+    acquire(&cowCounter.spinLock);
+    cowCounter.count[pa/PGSIZE]--;
+    release(&cowCounter.spinLock);
+  }
+
+  //9) Reinstall TLB entries
+  pde_t *temppgdir = myproc()->pgdir;
+  lcr3(V2P(temppgdir));
+}
