@@ -89,3 +89,12 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//EDIT: Procdump() systemcall implementation
+int
+sys_procdump(void)
+{
+  //Call the regular procdump function and return 0
+  procdump();
+  return 0;
+}

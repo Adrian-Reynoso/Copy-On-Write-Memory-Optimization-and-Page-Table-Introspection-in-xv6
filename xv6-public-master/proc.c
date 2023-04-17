@@ -190,7 +190,7 @@ fork(void)
   }
 
   // Copy process state from proc.
-  if((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0){
+  if((np->pgdir = cow(curproc->pgdir, curproc->sz)) == 0){
     kfree(np->kstack);
     np->kstack = 0;
     np->state = UNUSED;
@@ -530,5 +530,37 @@ procdump(void)
         cprintf(" %p", pc[i]);
     }
     cprintf("\n");
+
+    //For the page mappings 
+    cprintf("Page Mappings:\n");
+
+    //Get the first table which is the page directory and convert phsyical addr to virtual
+    pde_t *pt = p->pgdir;
+    pt = P2V(PTE_ADDR(*pt));
+
+    //Loop through to get the pointer for the page directory
+    for (int i = 0; i < NPTENTRIES; i++)
+    {
+      //If the first page table is here and is user level, print out the correct information
+      if (*pt & PTE_P && *pt & PTE_U)
+      {
+        //Get the physical page number
+        int physPageNum = *pt >> PTXSHIFT;
+
+        //Depending if it's writable, print out the correct output
+        if (*pt & PTE_W)
+        {
+          cprintf("%d -> %d, y \n", i, physPageNum);
+        }
+        else
+        {
+          cprintf("%d -> %d, n \n", i, physPageNum);
+        }
+      }
+
+      //Increment our page table ptr
+      pt++;
+    }
+
   }
 }
