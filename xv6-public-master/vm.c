@@ -300,7 +300,7 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       //If not, decrement counter and check if counter is 0 again
       else
       {
-        aquire(&cowCounter.spinLock);
+        acquire(&cowCounter.spinLock);
         cowCounter.count[pa/PGSIZE]--;
         release(&cowCounter.spinLock);
       }
@@ -310,7 +310,7 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
       {
         //Get the parent using walkpgdir
         pde_t* currProc = myproc()->parent->pgdir;
-        pte_t* tempParent = walkpgdir(currProc, a, 1);
+        pte_t* tempParent = walkpgdir(currProc, (void*)a, 1);
 
         //With this parent, update its shared (to be not shared) and writable (to be writable) flags
         *tempParent = *tempParent & ~PTE_S;
@@ -446,7 +446,6 @@ cow(pde_t *pgdir, uint sz)
   pde_t *d;
   pte_t *pte;
   uint pa, i, flags;
-  char *mem;
 
   if((d = setupkvm()) == 0)
     return 0;
@@ -491,7 +490,7 @@ void
 pagefault()
 {
   pte_t *pte;
-  uint pa, i, flags;
+  uint pa;
   char *mem;
 
   //1) Get cr2 address

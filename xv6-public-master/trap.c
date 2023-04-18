@@ -80,14 +80,7 @@ trap(struct trapframe *tf)
   //EDIT: IN THE CASE OF A PAGE FAULT
   case T_PGFLT:
     //First check if you are in kernel mode, if so call pagefault()
-    int checker = 0;
     if ((tf->cs & 3) != 0)
-    {
-      checker++;
-    }
-
-    //If it is in kernel mode
-    if (checker == 1)
     {
       pagefault();
     }
