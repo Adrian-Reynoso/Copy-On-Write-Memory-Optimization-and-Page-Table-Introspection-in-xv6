@@ -202,7 +202,9 @@ inituvm(pde_t *pgdir, char *init, uint sz)
 
   //Initialized cowCounter to 0
   acquire(&cowCounter.spinLock);
-  cowCounter.count[V2P(mem) / PGSIZE] = 0;
+  uint temp1 = V2P(mem);
+  uint temp2 = temp1 / PGSIZE;
+  cowCounter.count[temp2] = 0;
   release(&cowCounter.spinLock);
 }
 
@@ -261,7 +263,9 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 
     //Do the same thing in inituvm() and initialize counter to 0
     acquire(&cowCounter.spinLock);
-    cowCounter.count[V2P(mem) / PGSIZE] = 0;
+    uint temp1 = V2P(mem);
+    uint temp2 = temp1 / PGSIZE;
+    cowCounter.count[temp2] = 0;
     release(&cowCounter.spinLock);
   }
   return newsz;
@@ -446,6 +450,7 @@ cow(pde_t *pgdir, uint sz)
   pde_t *d;
   pte_t *pte;
   uint pa, i, flags;
+  char* mem;
 
   if((d = setupkvm()) == 0)
     return 0;
@@ -461,12 +466,16 @@ cow(pde_t *pgdir, uint sz)
 
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
-    // if((mem = kalloc()) == 0)
-    //   goto bad;
-    // memmove(mem, (char*)P2V(pa), PGSIZE);
+
+    
+    if((mem = kalloc()) == 0)
+      goto bad;
+    memmove(mem, (char*)P2V(pa), PGSIZE);
+
+
     // Map child to parent's page
     if(mappages(d, (void*)i, PGSIZE, pa, flags) < 0) {
-      // kfree(mem);
+      kfree(mem);
       goto bad;
     }
 
