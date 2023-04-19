@@ -450,7 +450,7 @@ cow(pde_t *pgdir, uint sz)
   pde_t *d;
   pte_t *pte;
   uint pa, i, flags;
-  char* mem;
+  // char* mem;
 
   if((d = setupkvm()) == 0)
     return 0;
@@ -468,14 +468,14 @@ cow(pde_t *pgdir, uint sz)
     flags = PTE_FLAGS(*pte);
 
     
-    if((mem = kalloc()) == 0)
-      goto bad;
-    memmove(mem, (char*)P2V(pa), PGSIZE);
+    // if((mem = kalloc()) == 0)
+    //   goto bad;
+    // memmove(mem, (char*)P2V(pa), PGSIZE);
 
 
     // Map child to parent's page
     if(mappages(d, (void*)i, PGSIZE, pa, flags) < 0) {
-      kfree(mem);
+      // kfree(mem);
       goto bad;
     }
 

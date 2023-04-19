@@ -1,7 +1,7 @@
 # CS350P4
 
-### USC emails:
+### USC emails: atreynos@usc.edu
 
-### How to compile:
+### How to compile: type "make qemu-nox" into the terminal
 
-### How to run:
+### How to run: Simply type "testcow" and enter
